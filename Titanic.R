@@ -4,6 +4,9 @@ install.packages("rattle")
 install.packages("rpart.plot")
 install.packages("RColorBrewer")
 install.packages("party")
+install.packages("caret")
+install.packages("gbm")
+install.packages("cvAUC")
 
 library(tensorflow)
 library(dplyr)
@@ -13,57 +16,89 @@ library(rattle)
 library(rpart.plot)
 library(RColorBrewer)
 library(party)
-
+library(caret)
+library(gbm)
+library(cvAUC)
 
 train <- read.csv('train.csv', stringsAsFactors = FALSE)
-View(train)
-glimpse(train)
+test <- read.csv('test.csv', stringsAsFactors = FALSE)
 
-train$Sex <- factor(train$Sex)
+test$Survived <- 0
 
-Agefit <- rpart(Age ~ Pclass + Sex + SibSp + Parch + Fare + Embarked, data = train[!is.na(train$Age),], method = "anova")
-train$Age[is.na(train$Age)] <- predict(Agefit, train[is.na(train$Age),])
+combi <- rbind(train, test)
 
-train$Age2 <- "old"
-train$Age2[train$Age <= 7] <- "baby"
-train$Age2[train$Age > 7 & train$Age <= 12] <- "child"
-train$Age2[train$Age > 12 & train$Age <= 18] <- "young"
-train$Age2[train$Age > 18 & train$Age <= 65] <- "adult"
+combi$Sex <- factor(combi$Sex)
 
-train$Age2 <- factor(train$Age2)
+Agefit <- rpart(Age ~ Pclass + Sex + SibSp + Parch + Fare + Embarked, data = combi[!is.na(combi$Age),], method = "anova")
+combi$Age[is.na(combi$Age)] <- predict(Agefit, combi[is.na(combi$Age),])
 
-which(train$Embarked == '')
-train$Embarked[c(62, 830)] = "S" 
-train$Embarked <- factor(train$Embarked)
+combi$Age <- as.integer(combi$Age)
 
-which(is.na(train$Fare))
+combi$Age2 <- "old"
+combi$Age2[combi$Age <= 12] <- "child"
+combi$Age2[combi$Age > 12 & combi$Age <= 21] <- "young"
+combi$Age2[combi$Age > 21 & combi$Age <= 65] <- "adult"
 
-train$Title <- sapply(train$Name, FUN=function(x) {strsplit(x, split='[,.]')[[1]][2]})
-train$Title[train$Title %in% c('Mme', 'Mlle')] <- 'Mlle'
-train$Title[train$Title %in% c('Capt', 'Don', 'Major', 'Sir')] <- 'Sir'
-train$Title[train$Title %in% c('Dona', 'Lady', 'the Countess', 'Jonkheer')] <- 'Lady'
+combi$Age2 <- factor(combi$Age2)
 
-train$Title <- factor(train$Title)
+which(combi$Embarked == '')
+combi$Embarked[c(62, 830)] = "S" 
+combi$Embarked <- factor(combi$Embarked)
 
-train$FamilySize <- train$SibSp + train$Parch + 1
+which(is.na(combi$Fare))
 
-train$Surname <- sapply(train$Name, FUN=function(x) {strsplit(x, split='[,.]')[[1]][1]})
+Farefit <- rpart(Fare ~ Pclass + Sex + SibSp + Parch + Fare + Embarked, data = combi[!is.na(combi$Fare),], method = "anova")
+combi$Fare[is.na(combi$Fare)] <- predict(Farefit, combi[is.na(combi$Fare),])
 
-train$FamilyID <- paste(as.character(train$FamilySize), train$Surname, sep="")
+combi$Title <- sapply(combi$Name, FUN=function(x) {strsplit(x, split='[,.]')[[1]][2]})
+combi$Title[combi$Title %in% c('Mme', 'Mlle')] <- 'Mlle'
+combi$Title[combi$Title %in% c('Capt', 'Don', 'Major', 'Sir')] <- 'Sir'
+combi$Title[combi$Title %in% c('Dona', 'Lady', 'the Countess', 'Jonkheer')] <- 'Lady'
 
-train$FamilyID[train$FamilySize <= 3] <- 'Small'
+allvalues <- unique(combi$Title)
 
-famIDs <- data.frame(table(train$FamilyID))
-train$FamilyID[train$FamilyID %in% famIDs$Var1] <- 'Small'
-train$FamilyID <- factor(train$FamilyID)
+combi$Title <- factor(combi$Title)
 
-set.seed(1)
-n <- nrow(train)
-shuffled <- train[sample(n),]
+combi$FamilySize <- combi$SibSp + combi$Parch + 1
 
-train_indices <- 1:round(0.7 * n)
-train2 <- shuffled[train_indices,]
-test_indices <- (round(0.7 * n) + 1) : n
-test <- shuffled[test_indices,]
+combi$Surname <- sapply(combi$Name, FUN=function(x) {strsplit(x, split='[,.]')[[1]][1]})
 
-fit <- cforest(as.factor(Survived) ~ Pclass + Sex + Age2 + SibSp + Parch + Fare + Embarked + Title + FamilySize + FamilyID + Surname, data = train2, controls = cforest_unbiased(ntree = 2000, mtry = 3))
+combi$FamilyID <- paste(as.character(combi$FamilySize), combi$Surname, sep="")
+
+combi$FamilyID[combi$FamilySize <= 2] <- 'Small'
+
+famIDs <- data.frame(table(combi$FamilyID))
+famIDs <- famIDs[famIDs$Freq <= 2,]
+combi$FamilyID[combi$FamilyID %in% famIDs$Var1] <- 'Small'
+
+combi$FamilyID <- factor(combi$FamilyID)
+
+test <- combi[892:1309,]
+train <- combi[1:891,]
+
+train$Name <- NULL
+test$Name <- NULL
+
+train$Ticket <- NULL
+test$Ticket <- NULL
+
+train$Cabin <- NULL
+test$Cabin <- NULL
+
+train$Surname <- NULL
+test$Surname <- NULL
+
+train$Title <- factor(train$Title, levels = allvalues)
+test$Title <- factor(test$Title, levels = allvalues)
+
+inTrain <- createDataPartition(y = train$Survived, p = 0.75, list = FALSE)
+
+training <- train[inTrain,]
+testing <- train[-inTrain,]
+
+modFit <- train(as.factor(Survived) ~., method = "gbm", data = train, verbose = FALSE)
+print(modFit)
+
+preds <- predict(modFit, newdata = test)
+sol <- data.frame(PassengerId = test$PassengerId , Survived = preds)
+write.csv(sol, file = "titanic_solution.csv", row.names = FALSE)
